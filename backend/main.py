@@ -1,15 +1,28 @@
-from fastapi import FastAPI, UploadFile, File
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import shutil
-import uuid
-import os
 
-from ocr import extract_text
-from normalizer import normalize_text
+from database import init_db
+from routers import process
 
-app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
-# Enable CORS for frontend
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+
+
+app = FastAPI(
+    title="Albanian OCR Normalizer",
+    description="AI-powered OCR and NLP normalization for Albanian language texts.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,24 +31,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.include_router(process.router, prefix="/api")
 
-@app.post("/process-image")
-async def process_image(file: UploadFile = File(...)):
-    file_id = str(uuid.uuid4()) + ".jpg"
-    file_path = os.path.join(UPLOAD_DIR, file_id)
 
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # OCR step
-    raw_text = extract_text(file_path)
-
-    # Normalization step
-    normalized_text = normalize_text(raw_text)
-
-    return {
-        "raw_text": raw_text,
-        "normalized_text": normalized_text
-    }
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "Albanian OCR Normalizer", "version": "1.0.0"}

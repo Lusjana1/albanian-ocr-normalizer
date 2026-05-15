@@ -86,3 +86,5 @@ http://localhost:5173
 - **GPU is optional** — if you have an NVIDIA GPU with CUDA, it will be used automatically; otherwise it falls back to CPU
 - The `backend/uploads/` folder is created automatically when you first upload a file
 - Every time you want to run the app, you need to activate the virtual environment first (`.venv\Scripts\activate`) before starting the backend
+
+this is the basic instrucitons
