@@ -1,7 +1,7 @@
 from paddleocr import PaddleOCR
 
 # Initialize OCR model
-ocr_model = PaddleOCR(lang='latin')
+ocr_model = PaddleOCR(lang='sq')
 
 def extract_text(image_path: str) -> str:
     result = ocr_model.ocr(image_path, cls=True)
