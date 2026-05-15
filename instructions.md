@@ -88,3 +88,4 @@ http://localhost:5173
 - Every time you want to run the app, you need to activate the virtual environment first (`.venv\Scripts\activate`) before starting the backend
 
 this is the basic instrucitons
+lucy
