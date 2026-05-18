@@ -1,35 +1,72 @@
 """
-Rule-based Albanian text cleaner.
-Handles OCR noise, character substitutions, spacing, and
-Albanian-specific orthographic patterns.
+Rule-based Albanian text cleaner for OCR output.
+
+Pipeline order:
+  1. Hyphenated line-break joining   (e.g. "fja-\nlë" → "fjalë")
+  2. OCR character substitutions     (digit/glyph confusions)
+  3. Albanian character recovery     (e→ë, c→ç in known words)
+  4. Noise removal
+  5. Whitespace normalisation
+  6. Punctuation fixes
+  7. Sentence capitalisation
 """
 import re
 
 
 # ---------------------------------------------------------------------------
-# OCR character substitution corrections (context-free)
+# Step 1 — Hyphenated line-break joining
 # ---------------------------------------------------------------------------
-_CHAR_SUBS = [
-    # Digits mistaken for letters
-    (r"(?<=[a-zA-ZëçËÇ])0(?=[a-zA-ZëçËÇ])", "o"),
-    (r"(?<=[a-zA-ZëçËÇ])1(?=[a-zA-ZëçËÇ])", "i"),
-    (r"\b1(?=[a-zA-ZëçËÇ])", "I"),
-    # Common glyph confusions
-    (r"rn", "m"),          # rn → m (very common OCR error)
-    (r"li(?=[a-z])", "h"), # 'li' → 'h' only at word interior (heuristic)
-    # Pipe/broken bar used as 'i' or 'l'
-    (r"\|(?=[a-z])", "l"),
-]
+# Books, poems, and scanned documents often hyphenate words at line ends.
+# This must run before any other substitution so hyphens are still intact.
+
+def _join_hyphenated_breaks(text: str) -> str:
+    # "fjal-\nlë" → "fjalë"   (word continues on next line without space)
+    text = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text)
+    # "fjal-  \n  lë" — already covered by the \s* above
+    return text
+
 
 # ---------------------------------------------------------------------------
-# Albanian digraph / special-character corrections
+# Step 2 — OCR character substitutions  (digit / glyph confusions)
 # ---------------------------------------------------------------------------
-_ALBANIAN_FIXES = [
-    # é, è, ê → ë (common OCR mistake for Albanian ë)
-    (r"[éèê]", "ë"),
-    # Ç / Ç variations
-    (r"[Ćć]", "ç"),
-    # Fix 'dh', 'gj', 'nj', 'sh', 'th', 'xh', 'zh' split by a space/hyphen
+# REMOVED:  rn → m   (breaks "alternativë", "qeverni", "shërbim", etc.)
+# REMOVED:  li → h   (breaks "politik", "familje", "libertar", etc.)
+
+_CHAR_SUBS = [
+    # Digits mistaken for letters inside words
+    (r"(?<=[A-Za-zëçËÇ])0(?=[A-Za-zëçËÇ])", "o"),
+    (r"(?<=[A-Za-zëçËÇ])1(?=[A-Za-zëçËÇ])", "i"),
+    (r"\b1(?=[A-Za-zëçËÇ])", "I"),
+    # Pipe / broken-bar used as l or i
+    (r"\|(?=[a-z])", "l"),
+    (r"(?<=[a-z])\|", "l"),
+    # Backtick / grave used as apostrophe
+    (r"`", "'"),
+    # Tilde used as dash in some old scans
+    (r"~", "-"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — Albanian character recovery
+# ---------------------------------------------------------------------------
+# OCR frequently substitutes ë with é/è/ê/ä/ö and ç with Ć/ć/c-cedilla.
+# Additionally, a small word-level dictionary corrects the most common cases
+# where plain 'e' is output instead of 'ë' and plain 'c' instead of 'ç'.
+
+_DIACRITIC_FIXES = [
+    # Accented Latin variants → Albanian ë
+    (r"[éèêëěĕ]", "ë"),
+    (r"[ÉÈÊËĚ]",  "Ë"),
+    # Accented variants → Albanian ç
+    (r"[ćčĉ]",    "ç"),
+    (r"[ĆČĈ]",    "Ç"),
+    # German-style umlauts that creep in via wrong codepage detection
+    (r"ä(?=[a-zëç])", "ë"),   # ä mid-word → ë  (conservative)
+]
+
+# Albanian digraph reconstruction — OCR often splits digraphs with spaces/hyphens.
+_DIGRAPH_FIXES = [
     (r"(?i)\b(d)\s*-?\s*(h)\b", r"\1\2"),
     (r"(?i)\b(g)\s*-?\s*(j)\b", r"\1\2"),
     (r"(?i)\b(n)\s*-?\s*(j)\b", r"\1\2"),
@@ -39,87 +76,147 @@ _ALBANIAN_FIXES = [
     (r"(?i)\b(z)\s*-?\s*(h)\b", r"\1\2"),
 ]
 
+# Word-level corrections: only apply when the exact OCR form is unambiguous.
+# Each tuple is (pattern_to_match, replacement).
+# Rules are intentionally conservative — no 'ne'→'në' because 'ne' is valid.
+_ALBANIAN_WORD_FIXES = [
+    # çdo (every) — 'cdo' is never a valid Albanian word
+    (r"\bcdo\b",    "çdo"),
+    (r"\bCdo\b",    "Çdo"),
+    (r"\bCDO\b",    "ÇDO"),
+    # çfarë (what/which) — various OCR forms
+    (r"\bcfare\b",  "çfarë"),
+    (r"\bcfar\b",   "çfar"),
+    # është (is) — 'eshte' unambiguous
+    (r"\beshte\b",  "është"),
+    (r"\bEshte\b",  "Është"),
+    # janë (are) — 'jane' unambiguous in Albanian context
+    (r"\bjane\b",   "janë"),
+    # kanë (have 3rd pl.) — 'kane' unambiguous
+    (r"\bkane\b",   "kanë"),
+    # bënë (they did) — 'bene' has meaning in other languages but rare here
+    (r"\bbene\b",   "bënë"),
+    # gjithë (all) — 'gjithe' unambiguous
+    (r"\bgjithe\b", "gjithë"),
+    # për (for) — 'per' is a safe fix in Albanian-dominant text
+    (r"\bper\b",    "për"),
+    (r"\bPer\b",    "Për"),
+    # që (that/which) — 'qe' unambiguous as Albanian connector
+    (r"\bqe\b",     "që"),
+    (r"\bQe\b",     "Që"),
+    # më (me/more) — 'me' is valid as a standalone word, skip
+    # të (to/the) — 'te' is also valid, skip
+    # në (in) — 'ne' ambiguous, skip
+    # si (like/how) — 'si' is correct already
+]
+
+
 # ---------------------------------------------------------------------------
-# Noise removal
+# Step 4 — Noise removal
 # ---------------------------------------------------------------------------
+
 _NOISE_PATTERNS = [
-    # Sequences of 3+ repeated non-alphanumeric chars
-    (r"([^a-zA-Z0-9ëçËÇ\s])\1{2,}", ""),
-    # Lone single non-alphanumeric/non-punctuation symbols on their own line
-    (r"(?m)^[^a-zA-Z0-9ëçËÇ]+$", ""),
-    # Page numbers: standalone digit sequences on their own line
+    # Long runs of the same non-alphanumeric character (e.g. ".....", "-----")
+    (r"([^A-Za-z0-9ëçËÇ\s])\1{3,}", ""),
+    # Lines that contain only punctuation / symbols (separator lines in scans)
+    (r"(?m)^[^A-Za-z0-9ëçËÇ]+$", ""),
+    # Standalone page numbers on their own line (1–4 digits)
     (r"(?m)^\s*\d{1,4}\s*$", ""),
-    # Excessive dashes used as separators
-    (r"-{3,}", ""),
-    # Remove zero-width / control characters except newlines/tabs
-    (r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", ""),
+    # Zero-width and control characters (except \t and \n)
+    (r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", ""),
+    # Isolated single non-letter, non-digit characters surrounded by spaces
+    # (common OCR artifact: stray dots, pipes, underscores between words)
+    (r"(?<= )[^A-Za-z0-9ëçËÇ'\"«»\-](?= )", ""),
 ]
 
-# ---------------------------------------------------------------------------
-# Whitespace normalisation
-# ---------------------------------------------------------------------------
-_SPACE_PATTERNS = [
-    (r"[ \t]+", " "),           # Multiple spaces/tabs → single space
-    (r" +\n", "\n"),            # Trailing spaces before newline
-    (r"\n{3,}", "\n\n"),        # Max two consecutive newlines
-    (r"^\s+|\s+$", ""),         # Strip leading/trailing whitespace
-]
 
 # ---------------------------------------------------------------------------
-# Punctuation fixes
+# Step 5 — Whitespace normalisation
 # ---------------------------------------------------------------------------
+
+def _normalise_whitespace(text: str) -> str:
+    # Collapse multiple spaces / tabs on a single line
+    text = re.sub(r"[ \t]+", " ", text)
+    # Remove trailing spaces before newlines
+    text = re.sub(r" +\n", "\n", text)
+    # Collapse 3+ blank lines to a single blank line (preserves paragraph breaks)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Strip leading/trailing whitespace from the whole text
+    return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — Punctuation fixes
+# ---------------------------------------------------------------------------
+
 _PUNCT_PATTERNS = [
-    # Space before punctuation → no space
-    (r"\s+([,.!?;:»])", r"\1"),
-    # No space after opening quote/bracket → add space
-    (r"(«|\(|\[)\s*", r"\1"),
-    # Ensure space after sentence-ending punctuation
+    # Remove space before punctuation
+    (r"\s+([,.!?;:»\)])", r"\1"),
+    # Ensure space after sentence-ending punctuation before a capital letter
     (r"([.!?])([A-ZËÇА-Я])", r"\1 \2"),
-    # Fix double punctuation
+    # Collapse repeated punctuation (e.g. ".." → ".")
     (r"([.!?]){2,}", r"\1"),
-    # Straight quotes → Albanian guillemets (optional, helps readability)
-    (r'"([^"]*)"', r"«\1»"),
+    # Straight double quotes → Albanian guillemets
+    (r'"([^"\n]{1,300})"', r"«\1»"),
 ]
 
 
-def _apply_patterns(text: str, patterns: list) -> str:
+# ---------------------------------------------------------------------------
+# Step 7 — Sentence capitalisation
+# ---------------------------------------------------------------------------
+
+def _capitalise_sentences(text: str) -> str:
+    # Capitalise the very first character
+    if text:
+        text = text[0].upper() + text[1:]
+    # Capitalise first letter after sentence-ending punctuation + whitespace
+    text = re.sub(
+        r"([.!?]\s+)([a-zëç])",
+        lambda m: m.group(1) + m.group(2).upper(),
+        text,
+    )
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
+
+def _apply(text: str, patterns: list) -> str:
     for pat, repl in patterns:
         text = re.sub(pat, repl, text)
     return text
 
 
-def _capitalize_sentences(text: str) -> str:
-    """Capitalize the first letter of each sentence."""
-    def cap(m):
-        return m.group(0)[0] + m.group(0)[1].upper() + m.group(0)[2:]
-
-    text = re.sub(r"(^|[.!?]\s+)([a-zëç])", lambda m: m.group(1) + m.group(2).upper(), text)
-    # Capitalize very first character
-    if text:
-        text = text[0].upper() + text[1:]
-    return text
-
-
 def clean_text(raw: str) -> str:
-    """Full cleaning pipeline."""
+    """Full cleaning pipeline for Albanian OCR output."""
     text = raw
 
-    # 1. OCR character substitutions
-    text = _apply_patterns(text, _CHAR_SUBS)
+    # 1. Hyphenated line-break joining (must be first)
+    text = _join_hyphenated_breaks(text)
 
-    # 2. Albanian-specific fixes
-    text = _apply_patterns(text, _ALBANIAN_FIXES)
+    # 2. OCR character substitutions
+    text = _apply(text, _CHAR_SUBS)
 
-    # 3. Remove noise
-    text = _apply_patterns(text, _NOISE_PATTERNS)
+    # 3a. Diacritic / character recovery
+    text = _apply(text, _DIACRITIC_FIXES)
 
-    # 4. Normalise whitespace
-    text = _apply_patterns(text, _SPACE_PATTERNS)
+    # 3b. Albanian digraph reconstruction
+    text = _apply(text, _DIGRAPH_FIXES)
 
-    # 5. Fix punctuation
-    text = _apply_patterns(text, _PUNCT_PATTERNS)
+    # 3c. Word-level Albanian corrections
+    text = _apply(text, _ALBANIAN_WORD_FIXES)
 
-    # 6. Capitalise sentences
-    text = _capitalize_sentences(text)
+    # 4. Noise removal
+    text = _apply(text, _NOISE_PATTERNS)
+
+    # 5. Whitespace normalisation
+    text = _normalise_whitespace(text)
+
+    # 6. Punctuation fixes
+    text = _apply(text, _PUNCT_PATTERNS)
+
+    # 7. Sentence capitalisation
+    text = _capitalise_sentences(text)
 
     return text.strip()

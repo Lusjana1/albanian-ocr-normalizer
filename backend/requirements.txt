@@ -10,3 +10,6 @@ transformers
 sentencepiece
 tiktoken
 aiosqlite
+opencv-python-headless
+easyocr
+numpy
