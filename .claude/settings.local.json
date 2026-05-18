@@ -17,7 +17,8 @@
       "Bash(echo \"PID: $!\")",
       "Bash(/Users/naseerkarimzai/projects/lucy/lucy/albanian-ocr-normalizer/backend/.venv/bin/python -c \"from paddleocr import PaddleOCR; help\\(PaddleOCR.__init__\\)\")",
       "Bash(/Users/naseerkarimzai/projects/lucy/lucy/albanian-ocr-normalizer/backend/.venv/bin/python *)",
-      "Bash(/Users/naseerkarimzai/projects/lucy/lucy/albanian-ocr-normalizer/backend/.venv/bin/pip install *)"
+      "Bash(/Users/naseerkarimzai/projects/lucy/lucy/albanian-ocr-normalizer/backend/.venv/bin/pip install *)",
+      "Bash(kill -9 16389)"
     ]
   }
 }
